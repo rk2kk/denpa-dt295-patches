@@ -1,12 +1,12 @@
 diff --git a/docs/EXPERIMENT-SUMMARY.md b/docs/EXPERIMENT-SUMMARY.md
 new file mode 100644
-index 00000000..793c9f2d
+index 00000000..d4c0bc29
 --- /dev/null
 +++ b/docs/EXPERIMENT-SUMMARY.md
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,128 @@
 +# PIX-DT295 + denpa 実験総括
 +
-+最終更新: 2026-11-05
++最終更新: 2026-11-17
 +
 +## 1. 目的
 +
@@ -111,7 +111,7 @@ index 00000000..793c9f2d
 +| ------------------ | ---------------------------------------- |
 +| Raspberry Pi 5     | 稼働中                                   |
 +| tuner-agent        | dt295-agent:local (0.3.2-dt295)          |
-+| denpa              | denpa-fork:prod (v2.31.0 + DT295 パッチ) |
++| denpa              | 上流 v2.51.0 + DT295 パッチ (denpa-dt295-patches) |
 +| pix-ts-legacy      | v0.1.4 (upstream merge 済み)             |
 +| CS プロファイル    | passthrough (MPEG-2)                     |
 +| GR/BS プロファイル | 720p8m (H.264, 7,644 kbps)               |
@@ -123,8 +123,57 @@ index 00000000..793c9f2d
 +2. GR/BS は H.264 トランスコード + コピー経路で低負荷・高画質
 +3. BonDriver の開発は現実的ではないため、Pi + denpa 構成を継続
 +4. tuner ファームウェアの CS バグは PIXELA がサポート終了のため修正不可
++
++## 6. v2.51 パッチ (denpa-dt295-patches) での変更
++
++- 対象: 上流 denpa v2.51.0 に `patches/0001-dt295-customizations.patch` を適用する方式 (fork を直接追従しない)
++- H.264 コピー経路は `-tag:v hvc1` を外した専用の引数を使う。HEVC のタグを付けると ffmpeg の mp4 muxer が失敗する (実測 2026-11-17)
++- コピーは GR/BS だけに限定した。`/presets` の「適用中」は GR/BS の設定を返すため、CS で誤判定して MPEG-2 を写さないようにするため
++- `-err_detect ignore_err` / `-fflags +discardcorrupt` を旧ブランチから復帰した (§3.1 の途切れは解消しないが、デコードエラーで落ちないため残す)
++- 「適用中」が `(不明)` のときはコピーしない。環境変数の URL はパースしてから使う (`#pair=` やカンマを送らない)
++- 平文 http はこのパッチを適用した denpa だけが受け付ける (上流エージェントは TLS 必須のまま)
+diff --git a/docs/agent.md b/docs/agent.md
+index 7e47767d..6d90983b 100644
+--- a/docs/agent.md
++++ b/docs/agent.md
+@@ -1489,6 +1489,7 @@ denpa の `ServiceFilter` とブラウザの `PesDemuxer` もカウンタを見
+ エージェントの API (`AGENT_PORT`、25252) は **HTTPS だけ**で、**組んだ denpa しか通しません**
+ (`agent/Denpa.Agent/AgentTls.cs`)。`/denpa/stream` は復号済みの TS をそのまま返し、`/denpa/card` はカード ID を返すので、
+ 届いた人を誰でも通すわけにはいきません。平文の HTTP は残していません (切り替える設定もありません)。
++（denpa-dt295-patches を適用した denpa は、DT295 エージェントに限り平文の `http://` も受け付けます。認証・TLS は行われません）
+ 前のバージョン (平文の HTTP) から上げるときの注意は [config.md](config.md#エージェントとの通信を-tls-にした-前のバージョンから上げるとき) にあります。
+ 
+ - **お互いを証明書で確かめます。** エージェントは自分の鍵と自己署名の証明書を持ち、denpa にもクライアント証明書を求めます。
+diff --git a/docs/config.md b/docs/config.md
+index 0f79005c..e54a425d 100644
+--- a/docs/config.md
++++ b/docs/config.md
+@@ -8,12 +8,13 @@ Helm では `charts/denpa/values.yaml` のキーで渡します。チューナ
+ 
+ | 変数                                    | 既定値                                         | 説明                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+ | --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+-| `TUNER_AGENT_URL`                       | (空。エージェントなし)                         | チューナーエージェント。`https://` で書き、初めて組むときは後ろに `#pair=<合言葉>` を付ける (`#` から後ろは送らない。[agent.md](agent.md#denpa-とは-tls-で組む))。カンマで区切って何台でも書ける。設定の「受信」の「エージェントを追加」から登録したものと同じ一覧に並ぶ ([agent.md](agent.md#エージェントを足す))。選局は局を受けられるエージェントに振り分け、録画とライブはカードの契約で絞る。スキャンはエージェントごとに回す (通知・ログ・バージョン・チャンネル・カードは全部から受け取る。[agent.md](agent.md#エージェントが何台もあるとき))。書いたものは起動のたびに DB の `agents` と突き合わせ、消したものは行も消す。ここに書いたものは画面から削除できない |
++| `TUNER_AGENT_URL`                       | (空。エージェントなし)                         | チューナーエージェント。`https://` で書き、初めて組むときは後ろに `#pair=<合言葉>` を付ける (DT295 パッチでは平文の `http://` も受け付ける。認証は無いので信頼できるネットワークだけで使う。`#` から後ろは送らない。[agent.md](agent.md#denpa-とは-tls-で組む))。カンマで区切って何台でも書ける。設定の「受信」の「エージェントを追加」から登録したものと同じ一覧に並ぶ ([agent.md](agent.md#エージェントを足す))。選局は局を受けられるエージェントに振り分け、録画とライブはカードの契約で絞る。スキャンはエージェントごとに回す (通知・ログ・バージョン・チャンネル・カードは全部から受け取る。[agent.md](agent.md#エージェントが何台もあるとき))。書いたものは起動のたびに DB の `agents` と突き合わせ、消したものは行も消す。ここに書いたものは画面から削除できない |
+ | `DENPA_DB`                              | `/data/denpa.db`                               | SQLite の置き場。局ロゴと CM 検出のために覚えたロゴもこの隣 (`logos/`)。別の機械へ移すときの書き出しと取り込みの作業場所も隣 (`transfer/`。[migrate.md](migrate.md#別の機械へ移す))。ニコニコとの連携のトークンを開く鍵も隣 (`niconico.key`)。エージェントと組むための denpa の鍵と証明書も隣 (`tls/`。組んだエージェントの証明書は DB の `agents` に持つ)                                                                                                                                                                                                                                                                                                               |
+ | `MEDIA_DIR`                             | `/media`                                       | 録画の置き場の親。元の TS は `raw`、エンコードしたものは `encoded` に分けて置く。エージェントも同じ変数を見る                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+ | `RAW_DIR`                               | `$MEDIA_DIR/raw`                               | 元の TS の作業領域。別のディスクへ移すときは `ENCODED_DIR` と同じく、マウントを付け替える                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+ | `ENCODED_DIR`                           | `$MEDIA_DIR/encoded`                           | エンコード済みの置き場。ここから配る。録画を入れたあとに別のディスクへ移すなら、これは変えずにマウントを付け替える ([library.md](library.md#置き場を別のディスクに移す))。切り抜きの画像もこの下 (`clips/`) に置く                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+ | `FFMPEG` / `FFPROBE`                    | `/usr/local/bin/...`                           | 開発時は偽物に差し替える。Mac と Windows はインストーラが、Android はアプリが配布物の中を指す                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
++| `DENPA_LIVE_COPY`                       | `false`                                        | (DT295 パッチ) チューナーが H.264 に変換しているとき、再エンコードせず `-c:v copy` で写す。GR/BS だけ有効で、CS は必ず再エンコード。音声は AAC にエンコードする |
+ | `MPEG2_DIR`                             | `/opt/denpa/mpeg2`                             | ブラウザへ配る MPEG-2・AAC・Opus のデコーダ (WASM) の置き場。変換せずに観るライブと録画、互換モードの音で使う。イメージの `mpeg2wasm` 段が置き、Mac と Windows はインストーラが、Android はアプリが配布物の中を指す。無ければこの方式は使えず、エンコードしたものに戻る ([stream.md](stream.md#放送そのままmpeg-2を送る))                                                                                                                                                                                                                                                                                                                                                |
+ | `FONT_DIR`                              | `/usr/share/denpa-font`                        | データ放送・字幕を描く字 (Denpa Font) の置き場。`/api/font/` が配る。イメージの `denpa-font` 段が置き、Mac は install.sh、Windows は install.ps1、Android はアプリが配布物の中を指す。無ければ 404 を返し、画面は端末の字で描く                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+ | `DENPA_VERSION`                         | `dev`                                          | 動いているバージョン。リリースのイメージ (`.github/release.Dockerfile`) と、Mac・Windows のインストーラが書く起動スクリプト、Android のリリースの APK にだけ入る。`dev` なら新しいバージョンの通知を出さない                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+@@ -126,7 +127,7 @@ Helm では `charts/denpa/values.yaml` のキーで渡します。チューナ
+ **denpa とエージェントは HTTPS で繋ぎ、エージェントは合言葉で組んだ denpa にしか答えなくなりました** ([agent.md](agent.md#denpa-とは-tls-で組む))。
+ 平文の HTTP は残していないので、denpa とエージェントは同じバージョンに上げます。
+ 
+-- `TUNER_AGENT_URL` は `https://` で書き、`#pair=<合言葉>` を付ける。`http://` のままだと、エージェントを呼ぶたびにエラーになる
++- `TUNER_AGENT_URL` は `https://` で書き、`#pair=<合言葉>` を付ける。`http://` のままだと、エージェントを呼ぶたびにエラーになる (DT295 パッチを適用した denpa は平文の http も受け付ける)
+ - compose.prod.yml を写して使っているなら、新しいものに置き換え、同じ場所の `.env` に `AGENT_PAIR_TOKEN` を作る
+   ([作り方](install.md#docker-compose-を手で置く))。無いと compose は止まる
+ - Linux・Mac・Windows のインストーラは流し直せば合言葉を作って両方に渡す。`denpa-aio` と Helm の `charts/denpa` は何もしなくてよい。
 diff --git a/src/lib/components/player/settings.ts b/src/lib/components/player/settings.ts
-index 0c1fce22..3e3691eb 100644
+index 0c1fce22..d4217006 100644
 --- a/src/lib/components/player/settings.ts
 +++ b/src/lib/components/player/settings.ts
 @@ -95,6 +95,10 @@ export function liveCodecs(opts: {
@@ -133,7 +182,7 @@ index 0c1fce22..3e3691eb 100644
    onselect: (choice: LiveChoice) => void;
 +  /** チューナー側の画質 (DT295 のオンボード変換)。選局のときにだけ効く */
 +  preset?: string;
-+  presets?: { id: string; label: string }[];
++  presets?: readonly { id: string; label: string }[];
 +  onpreset?: (preset: string) => void;
  }): SettingChoice {
    const broadcast = opts.broadcast ?? "mpeg2";
@@ -159,18 +208,10 @@ index 0c1fce22..3e3691eb 100644
        else opts.onselect(key as LiveChoice);
      },
 diff --git a/src/lib/live.ts b/src/lib/live.ts
-index 65f3d742..45977fa9 100644
+index 65f3d742..3353009b 100644
 --- a/src/lib/live.ts
 +++ b/src/lib/live.ts
-@@ -71,6 +71,7 @@ export function codecsFor(
-   return 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
- }
- 
-+/**
- /**
-  * **4K の局の放送の HEVC と AAC を詰め替えた fMP4** (`server/live.ts` の 4K の経路。`mp4/mmt.ts`)。
-  * Main 10 Profile・Level 5.1 (2160p60)。入れ物の中の名前は `hvc1` (Safari は `hev1` を受け取らない。VPS・SPS・PPS は `hvcC` にだけ置く。`mp4/mmt.ts`)
-@@ -92,6 +93,20 @@ export function mseType(
+@@ -92,6 +92,20 @@ export function mseType(
    return supported(lower) ? lower : type;
  }
  
@@ -178,15 +219,15 @@ index 65f3d742..45977fa9 100644
 + * チューナー側の画質プリセット (DT295 のオンボード変換)。
 + * `passthrough` は変換しない = 放送の MPEG-2 そのまま。値は選局のときにだけ効く。
 + */
-+export type LiveTunerPreset = string;
-+
-+export const LIVE_TUNER_PRESETS: { id: LiveTunerPreset; label: string }[] = [
++export const LIVE_TUNER_PRESETS = [
 +  { id: "passthrough", label: "MPEG-2 パススルー" },
 +  { id: "720p8m", label: "H.264 720p 8Mbps" },
 +  { id: "720p4m", label: "H.264 720p 4Mbps" },
 +  { id: "480p15", label: "H.264 480p 1.5Mbps" },
 +  { id: "240p03", label: "H.264 240p 300kbps" },
-+];
++] as const;
++
++export type LiveTunerPreset = (typeof LIVE_TUNER_PRESETS)[number]["id"];
 +
  /**
   * 選べる字幕 1 つぶん。**取り決めなので、ここに置く**。組み立てるのは
@@ -380,7 +421,7 @@ index f1033ad8..588b2b5f 100644
     * GPU のデバイスを探すパターン (最後の段に `*`)。当たったデバイスを全部試して、VA-API が
     * 初期化できたものでエンコードする (server/hwenc.ts)。Pod / コンテナに `/dev/dri` を
 diff --git a/src/lib/server/live.test.ts b/src/lib/server/live.test.ts
-index 3f769d5b..4551045f 100644
+index 3f769d5b..f6ec2f37 100644
 --- a/src/lib/server/live.test.ts
 +++ b/src/lib/server/live.test.ts
 @@ -242,7 +242,7 @@ describe("ライブのエンコード方法", () => {
@@ -401,7 +442,7 @@ index 3f769d5b..4551045f 100644
      );
    });
  
-@@ -346,6 +346,89 @@ describe("エンコード方式を選ぶ", () => {
+@@ -346,6 +346,103 @@ describe("エンコード方式を選ぶ", () => {
    });
  });
  
@@ -441,6 +482,20 @@ index 3f769d5b..4551045f 100644
 +    expect(args[args.indexOf("-c:v") + 1]).toBe("copy");
 +    expect(args).not.toContain("libx264");
 +    expect(args[args.indexOf("-c:a") + 1]).toBe("aac");
++  });
++
++  /** H.264 に hvc1 を付けると mp4 muxer がヘッダを書けない (実測 2026-11-17) */
++  test("H.264 には hvc1 のタグを付けない", () => {
++    const args = passthrough();
++    expect(args).not.toContain("-tag:v");
++    expect(args).not.toContain("hvc1");
++  });
++
++  /** 旧 dt295 ブランチの CS 対策を復帰した */
++  test("壊れたパケットは捨てる", () => {
++    const joined = passthrough().join(" ");
++    expect(joined).toContain("-err_detect ignore_err");
++    expect(joined).toContain("-fflags +discardcorrupt");
 +  });
 +
 +  /** フィルタを掛けると ffmpeg がデコードを始めるので、写せない */
@@ -491,7 +546,15 @@ index 3f769d5b..4551045f 100644
  /**
   * **AV1 と組むときは Opus。**
   *
-@@ -688,7 +771,7 @@ describe("GPU でエンコードする", () => {
+@@ -591,6 +688,7 @@ describe("音声だけのエンコード方式 (外から使う API の ?audio=o
+       "pipe:3",
+       "ts",
+       "mpeg2",
++      false,
+       true,
+     );
+     expect(args).not.toContain("pipe:0");
+@@ -688,7 +786,7 @@ describe("GPU でエンコードする", () => {
    test("字幕の出力・コマ数の上限・音声はソフトウェアのときと同じ", () => {
      for (const args of [encodeOnly(), full()]) {
        expect(args[args.indexOf("-fpsmax") + 1]).toBe("60000/1001");
@@ -501,10 +564,18 @@ index 3f769d5b..4551045f 100644
        expect(args.join(" ")).toContain("-c:a aac");
      }
 diff --git a/src/lib/server/live.ts b/src/lib/server/live.ts
-index 4948b141..fc9ebb65 100644
+index 4948b141..e5f9f714 100644
 --- a/src/lib/server/live.ts
 +++ b/src/lib/server/live.ts
-@@ -315,11 +315,13 @@ export function encodeArgs(
+@@ -112,6 +112,7 @@ import {
+   tsFileHead,
+ } from "./chase";
+ import { config } from "./config";
++import { tunerPresetOrigin, transcodingFromPresetsHtml } from "./tuner-preset";
+ import { scrambledLiveNotice } from "./contracts";
+ import { AutoStartWatch, DataBroadcast } from "./databroadcast";
+ import { orm } from "./db";
+@@ -315,19 +316,24 @@ export function encodeArgs(
    side = "pipe:3",
    transport: Transport = "ts",
    video: BroadcastCodec = broadcastCodec(transport),
@@ -514,18 +585,47 @@ index 4948b141..fc9ebb65 100644
    if (silent) return silentArgs(rung);
    const uhd = transport === "tlv";
 -  const copy = copiesVideo(transport, video, codec);
-+  const copy =
-+    (tunerCopy && codec === "h264") || copiesVideo(transport, video, codec);
++  // チューナーが作った H.264 は HEVC とタグが違う (`hvc1` を付けると mp4 muxer が失敗する)
++  const tunerH264 = tunerCopy && codec === "h264";
++  const copy = tunerH264 || copiesVideo(transport, video, codec);
    const picture =
      codec === "audio"
        ? null
-@@ -453,6 +455,35 @@ export function copiesVideo(
+-      : copy
+-        ? HEVC_COPY
+-        : video === "hevc"
+-          ? uhdVideoArgs(codec, hw, rung, half)
+-          : videoArgs(codec, hw, true, rung, null, half);
++      : tunerH264
++        ? H264_COPY
++        : copy
++          ? HEVC_COPY
++          : video === "hevc"
++            ? uhdVideoArgs(codec, hw, rung, half)
++            : videoArgs(codec, hw, true, rung, null, half);
+   // 4K の局の fMP4 には番組の番号が無い (局は 1 つだけ)
+   const from = uhd ? "0" : programSpec(program);
+   return [
+@@ -337,6 +343,11 @@ export function encodeArgs(
+     // 数字の進み具合だけ止める。`-loglevel` は下げられない (上の説明)
+     "-nostats",
+     // `-fflags nobuffer` は付けない。解析の間に読んだ I フレームを捨てて次の GOP を待つ (上の説明)
++    // 壊れたパケットで ffmpeg が落ちないようにする (旧 dt295 ブランチの CS 対策を復帰)
++    "-err_detect",
++    "ignore_err",
++    "-fflags",
++    "+discardcorrupt",
+     // 1 局に絞ってあるが、字幕まで見つけさせるぶん要る (上の説明)。映像を写すときは多く読む (`HEVC_COPY_PROBE`)
+     "-probesize",
+     copy ? HEVC_COPY_PROBE : "100000",
+@@ -453,6 +464,37 @@ export function copiesVideo(
    return transport === "ts" && video === "hevc" && codec === "hevc";
  }
  
 +/**
 + * **チューナーが既に H.264 を作っているか** (`config.liveCopy` のときだけ写す)。
-+ * エージェントの /presets の「適用中」を見て、passthrough 以外なら true。
++ * エージェントの /presets の「適用中」を見て、passthrough と「(不明)」以外なら true。
++ * 「適用中」は GR/BS の設定なので、CS は呼び側でコピーさせない (`Session.runEncode`)。
 + * 短く待って、少しの間は覚えておく (選局のたびに待つと映像が出るのが遅れる)。
 + */
 +const PRESET_TTL = 30_000;
@@ -537,16 +637,17 @@ index 4948b141..fc9ebb65 100644
 +    return presetSeen.transcoding;
 +  }
 +  let transcoding = false;
-+  try {
-+    const res = await fetch(`${config.agentUrl}/presets`, {
-+      redirect: "manual",
-+      signal: AbortSignal.timeout(1500),
-+    });
-+    const html = await res.text();
-+    const active = /適用中: <b>([^<]*)<\/b>/.exec(html)?.[1] ?? null;
-+    transcoding = active !== null && active !== "passthrough";
-+  } catch {
-+    transcoding = false;
++  const origin = tunerPresetOrigin();
++  if (origin !== null) {
++    try {
++      const res = await fetch(`${origin}/presets`, {
++        redirect: "manual",
++        signal: AbortSignal.timeout(1500),
++      });
++      transcoding = transcodingFromPresetsHtml(await res.text());
++    } catch {
++      transcoding = false;
++    }
 +  }
 +  presetSeen = { at: now, transcoding };
 +  return transcoding;
@@ -555,35 +656,46 @@ index 4948b141..fc9ebb65 100644
  /**
   * **TS に HEVC を入れて送る 4K の局の `hevc`。映像はエンコードせずに写す** (docs/stream.md「TS で送る 4K の局」)。
   * コンテナ内のタグは `hvc1` (Safari は `hev1` を受け取らない)。音声は AAC の LATM で、MSE は受け取らないので
-@@ -1781,6 +1812,7 @@ class Session {
-    * 映像のコーデックは PMT を読んでから決まるので、ffmpeg を起こすたびに決め直す (`runEncode`)
-    */
-   private copied = false;
-+  private copyExpected = false;
+@@ -464,6 +506,17 @@ const HEVC_COPY: { input: string[]; filter: string; encoder: string[] } = {
+   encoder: ["-c:v", "copy", "-tag:v", "hvc1"],
+ };
  
-   /** 4K の局の放送の HEVC を、エンコードせずに詰め替えて配るか (`runMmt`)。4K の局の `hevc` はこれだけを指す */
-   get passthrough(): boolean {
-@@ -2264,7 +2296,18 @@ class Session {
++/**
++ * **チューナーが作った H.264 をそのまま写す** (`config.liveCopy`)。
++ * `HEVC_COPY` と違って `-tag:v hvc1` を付けない — H.264 (avc1) に hvc1 を付けると
++ * ffmpeg の mp4 muxer がヘッダを書けず失敗する (実測 2026-11-17)。
++ */
++const H264_COPY: { input: string[]; filter: string; encoder: string[] } = {
++  input: [],
++  filter: "",
++  encoder: ["-c:v", "copy"],
++};
++
+ /**
+  * 映像を写すときの `-probesize` (バイト)。ffmpeg の既定と同じ 5MB。
+  * 写すときは、mp4 のマルチプレクサが映像の大きさと VPS・SPS・PPS (`hvcC`) を読んでから書き始める必要がある。
+@@ -2264,7 +2317,19 @@ class Session {
          this.produced = false;
          this.busy = false;
          this.noMedia = null;
 -        this.copied = copiesVideo(this.transport, video, this.codec);
 +        let tunerCopy = false;
++        // 「適用中」は GR/BS の設定。CS は別プロファイル (多くは passthrough) なので写さない
 +        if (
 +          config.liveCopy &&
 +          this.codec === "h264" &&
-+          this.source === undefined
++          this.source === undefined &&
++          (this.channelType === "GR" || this.channelType === "BS")
 +        ) {
 +          tunerCopy = await tunerTranscoding();
 +        }
 +        if (tunerCopy) hw = null;
 +        this.copied =
 +          tunerCopy || copiesVideo(this.transport, video, this.codec);
-+        this.copyExpected = tunerCopy;
          this.software = hw === null && !this.copied;
          // 遅れと速さは ffmpeg ごとに数え直す (前の ffmpeg の遅れと、起こし直した直後の速さを合わせない)
          this.lag.reset();
-@@ -2293,6 +2336,7 @@ class Session {
+@@ -2293,6 +2358,7 @@ class Session {
                side?.url,
                this.transport,
                video,
@@ -591,15 +703,91 @@ index 4948b141..fc9ebb65 100644
                this.silent,
              ),
            ],
+diff --git a/src/lib/server/tuner-preset.test.ts b/src/lib/server/tuner-preset.test.ts
+new file mode 100644
+index 00000000..c2742131
+--- /dev/null
++++ b/src/lib/server/tuner-preset.test.ts
+@@ -0,0 +1,32 @@
++import { describe, expect, test } from "bun:test";
++
++import {
++  activePresetFromHtml,
++  transcodingFromPresetsHtml,
++} from "./tuner-preset";
++
++const page = (active: string) =>
++  `<!doctype html><p>適用中: <b>${active}</b>　（切り替えは次の選局から反映）</p>`;
++
++describe("エージェントの /presets の読み取り", () => {
++  test("passthrough はコピーしない", () => {
++    expect(transcodingFromPresetsHtml(page("passthrough"))).toBe(false);
++  });
++
++  test("H.264 プリセットはコピーする", () => {
++    expect(transcodingFromPresetsHtml(page("720p8m"))).toBe(true);
++  });
++
++  test("(不明) はコピーしない", () => {
++    expect(transcodingFromPresetsHtml(page("(不明)"))).toBe(false);
++  });
++
++  test("適用中が無い HTML はコピーしない", () => {
++    expect(transcodingFromPresetsHtml("<html></html>")).toBe(false);
++  });
++
++  test("API に返す値は (不明) を null にする", () => {
++    expect(activePresetFromHtml(page("(不明)"))).toBeNull();
++    expect(activePresetFromHtml(page("720p8m"))).toBe("720p8m");
++  });
++});
+diff --git a/src/lib/server/tuner-preset.ts b/src/lib/server/tuner-preset.ts
+new file mode 100644
+index 00000000..2a41f3da
+--- /dev/null
++++ b/src/lib/server/tuner-preset.ts
+@@ -0,0 +1,29 @@
++/**
++ * チューナーエージェントの `/presets` を読むための小さな道具。
++ *
++ * 環境変数の文字列をそのまま URL にすると `#pair=` やカンマがパスに混ざるので、
++ * 必ず `parseAgentUrls` を通してから使う (握手の証明書はここでは要らない)。
++ */
++import { parseAgentUrls } from "./agents";
++import { config } from "./config";
++
++/** `/presets` を叩くためのエージェントの土台。読めなければ null */
++export function tunerPresetOrigin(): string | null {
++  try {
++    return parseAgentUrls(config.agentUrl)[0]?.origin ?? null;
++  } catch {
++    return null;
++  }
++}
++
++/** `/presets` の HTML から「適用中」の値を読む。「(不明)」は未確定なので null */
++export function activePresetFromHtml(html: string): string | null {
++  const active = /適用中: <b>([^<]*)<\/b>/.exec(html)?.[1] ?? null;
++  return active === null || active === "(不明)" ? null : active;
++}
++
++/** `/presets` の HTML から「チューナーが H.264 を作っているか」を読む (純粋関数) */
++export function transcodingFromPresetsHtml(html: string): boolean {
++  const active = activePresetFromHtml(html);
++  return active !== null && active !== "passthrough";
++}
 diff --git a/src/routes/api/tuner-preset/+server.ts b/src/routes/api/tuner-preset/+server.ts
 new file mode 100644
-index 00000000..67e760c1
+index 00000000..60853ffa
 --- /dev/null
 +++ b/src/routes/api/tuner-preset/+server.ts
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,58 @@
 +import { json } from "@sveltejs/kit";
 +
-+import { config } from "#lib/server/config.js";
++import {
++  activePresetFromHtml,
++  tunerPresetOrigin,
++} from "#lib/server/tuner-preset.js";
 +
 +/**
 + * チューナー (DT295 エージェント) の画質プリセットを読み書きする。
@@ -611,13 +799,14 @@ index 00000000..67e760c1
 +const PRESET = /^[a-z0-9]{1,16}$/;
 +
 +export async function GET() {
++  const origin = tunerPresetOrigin();
++  if (origin === null) return json({ active: null });
 +  try {
-+    const res = await fetch(`${config.agentUrl}/presets`, {
++    const res = await fetch(`${origin}/presets`, {
 +      redirect: "manual",
++      signal: AbortSignal.timeout(1500),
 +    });
-+    const html = await res.text();
-+    const active = /適用中: <b>([^<]*)<\/b>/.exec(html)?.[1] ?? null;
-+    return json({ active });
++    return json({ active: activePresetFromHtml(await res.text()) });
 +  } catch {
 +    return json({ active: null });
 +  }
@@ -631,10 +820,17 @@ index 00000000..67e760c1
 +  if (!PRESET.test(preset)) {
 +    return json({ message: "preset が不正です" }, { status: 400 });
 +  }
++  const origin = tunerPresetOrigin();
++  if (origin === null) {
++    return json({ message: "チューナーに繋がりません" }, { status: 502 });
++  }
 +  try {
 +    const res = await fetch(
-+      `${config.agentUrl}/presets/select?name=${encodeURIComponent(preset)}`,
-+      { redirect: "manual" },
++      `${origin}/presets/select?name=${encodeURIComponent(preset)}`,
++      {
++        redirect: "manual",
++        signal: AbortSignal.timeout(1500),
++      },
 +    );
 +    if (res.status >= 400) {
 +      return json({ message: "切り替えに失敗しました" }, { status: 502 });
@@ -645,7 +841,7 @@ index 00000000..67e760c1
 +  }
 +}
 diff --git a/src/routes/live/+page.svelte b/src/routes/live/+page.svelte
-index d80ff48f..c4e9d097 100644
+index d80ff48f..88de0e80 100644
 --- a/src/routes/live/+page.svelte
 +++ b/src/routes/live/+page.svelte
 @@ -1,4 +1,5 @@
@@ -662,7 +858,7 @@ index d80ff48f..c4e9d097 100644
    import type { HybridcastLink } from "#lib/live.js";
    import { separateLiveAudio } from "#lib/native-audio-choice.js";
    import { recordNotice } from "#lib/record-notice.js";
-@@ -296,7 +298,39 @@
+@@ -296,7 +298,45 @@
    }
  
    /** 一覧の各行。開いたときに、いま映している局まで送る (局が 100 を超えると画面の外のほうが普通) */
@@ -688,14 +884,20 @@ index d80ff48f..c4e9d097 100644
 +  }
 +
 +  async function selectTunerPreset(name: string) {
-+    tunerPresetId = name;
 +    try {
 +      const res = await fetch(resolve("api/tuner-preset"), {
 +        method: "POST",
 +        headers: { "content-type": "application/json" },
 +        body: JSON.stringify({ preset: name }),
 +      });
-+      if (!res.ok) await loadTunerPreset();
++      if (!res.ok) {
++        await loadTunerPreset();
++        return;
++      }
++      // 切り替えが成功したときだけ表示とコーデックを合わせる (失敗したら元に戻す)
++      tunerPresetId = name;
++      if (name === "passthrough") player.setChoice("raw");
++      else if (player.choice === "raw") player.setChoice("h264");
 +    } catch {
 +      await loadTunerPreset();
 +    }
@@ -703,7 +905,7 @@ index d80ff48f..c4e9d097 100644
    /** 一覧そのもの。送るのはこの中だけ (下の説明) */
    let list = $state<HTMLElement | null>(null);
    /** 一度送った一覧は、あとは触らない。見ている途中で勝手に動くと邪魔になる (詳細を閉じるなどで作り直した一覧は先頭からなので、また送る) */
-@@ -870,6 +904,13 @@
+@@ -870,6 +910,11 @@
                  broadcast: player.broadcast,
                  unavailable: player.unavailable,
                  onselect: (next) => player.setChoice(next),
@@ -711,8 +913,6 @@ index d80ff48f..c4e9d097 100644
 +                presets: LIVE_TUNER_PRESETS,
 +                onpreset: (id) => {
 +                  void selectTunerPreset(id);
-+                  if (id === "passthrough") player.setChoice("raw");
-+                  else if (player.choice === "raw") player.setChoice("h264");
 +                },
                })}
                audio={liveAudio(AUDIO, player)}
